@@ -56,3 +56,17 @@ command.
  * `cdk docs`        open CDK documentation
 
 Enjoy!
+
+pip install -r requirements.txt
+
+deactivate
+
+pip install boto3 opensearch-py
+
+cdk deploy --all --profile=milo-simulator --region=us-east-1
+
+.venv\Scripts\activate.bat
+
+.venv/bin/activate
+
+.venv\Scripts\Activate.ps1
