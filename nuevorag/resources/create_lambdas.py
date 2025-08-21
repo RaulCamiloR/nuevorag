@@ -34,10 +34,15 @@ def create_test_lambda(app, prefix, layer):
     return test_lambda
 
 
-def create_process_lambda(app, prefix, layer):
+def create_process_lambda(app, prefix, layer, opensearch_collection):
     """
     Crea la Lambda para procesar archivos subidos a S3
     """
+    
+    # Environment variables - se agregará OPENSEARCH_ENDPOINT después si es necesario
+    env_vars = {}
+    if opensearch_collection:
+        env_vars["OPENSEARCH_ENDPOINT"] = f"https://{opensearch_collection.attr_collection_endpoint}"
     
     process_lambda = PythonFunction(app, f"{prefix}-ProcessLambda",
         runtime=lambda_.Runtime.PYTHON_3_12,
@@ -47,6 +52,7 @@ def create_process_lambda(app, prefix, layer):
         layers=[layer],    
         timeout=Duration.minutes(15),  # Más tiempo para procesamiento
         memory_size=2048,              # Más memoria para procesar archivos grandes
+        environment=env_vars
     )
 
     # Permisos para leer de S3
@@ -61,7 +67,7 @@ def create_process_lambda(app, prefix, layer):
         )
     )
     
-    # Permisos para Bedrock (para futuras funcionalidades)
+    # Permisos para Bedrock
     process_lambda.add_to_role_policy(
         iam.PolicyStatement(
             effect=iam.Effect.ALLOW,
@@ -73,13 +79,43 @@ def create_process_lambda(app, prefix, layer):
             resources=["*"]
         )
     )
+    
+    # Permisos para OpenSearch Serverless (solo si la colección existe)
+    if opensearch_collection:
+        process_lambda.add_to_role_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "aoss:CreateIndex",
+                    "aoss:DeleteIndex", 
+                    "aoss:UpdateIndex",
+                    "aoss:DescribeIndex",
+                    "aoss:ReadDocument",
+                    "aoss:WriteDocument",
+                    "aoss:CreateCollection",
+                    "aoss:DeleteCollection",
+                    "aoss:UpdateCollection",
+                    "aoss:DescribeCollection"
+                ],
+                resources=[opensearch_collection.attr_arn, f"{opensearch_collection.attr_arn}/*"]
+            )
+        )
+    else:
+        # Permisos generales para OpenSearch Serverless (se refinará después)
+        process_lambda.add_to_role_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "aoss:*"
+                ],
+                resources=["*"]
+            )
+        )
 
     return process_lambda
 
+
 def create_upload_lambda(app, prefix, layer, bucket):
-    """
-    Crea la Lambda para generar presigned URLs para upload de archivos
-    """
     
     upload_lambda = PythonFunction(app, f"{prefix}-UploadLambda",
         runtime=lambda_.Runtime.PYTHON_3_12,
@@ -87,14 +123,13 @@ def create_upload_lambda(app, prefix, layer, bucket):
         handler="lambda_handler",    
         index="upload.py",           
         layers=[layer],    
-        timeout=Duration.minutes(1),   # Operación rápida
-        memory_size=512,               # Poca memoria necesaria
+        timeout=Duration.minutes(1),   
+        memory_size=512,              
         environment={
-            "BUCKET_NAME": bucket.bucket_name  # Pasar nombre del bucket
+            "BUCKET_NAME": bucket.bucket_name
         }
     )
 
-    # Permisos para generar presigned URLs (solo lectura de metadatos)
     upload_lambda.add_to_role_policy(
         iam.PolicyStatement(
             effect=iam.Effect.ALLOW,
@@ -102,11 +137,10 @@ def create_upload_lambda(app, prefix, layer, bucket):
                 "s3:PutObject",
                 "s3:PutObjectAcl"
             ],
-            resources=[f"{bucket.bucket_arn}/uploads/*"]  # Solo en carpeta uploads
+            resources=[f"{bucket.bucket_arn}/uploads/*"]
         )
     )
     
-    # Permisos para acceder a metadatos del bucket
     upload_lambda.add_to_role_policy(
         iam.PolicyStatement(
             effect=iam.Effect.ALLOW,
@@ -118,3 +152,32 @@ def create_upload_lambda(app, prefix, layer, bucket):
     )
 
     return upload_lambda
+
+
+def create_verify_lambda(app, prefix, layer):
+
+    verify_lambda = PythonFunction(app, f"{prefix}-VerifyLambda",
+        runtime=lambda_.Runtime.PYTHON_3_12,
+        entry="functions",  
+        handler="lambda_handler",    
+        index="verify.py",           
+        layers=[layer],    
+        timeout=Duration.minutes(1),   
+        memory_size=512,               
+        environment={
+            # Se agregará OPENSEARCH_ENDPOINT en el stack principal
+        }
+    )
+
+    # Permisos para leer de OpenSearch Serverless
+    verify_lambda.add_to_role_policy(
+        iam.PolicyStatement(
+            effect=iam.Effect.ALLOW,
+            actions=[
+                "aoss:*"  # Permisos de lectura para OpenSearch
+            ],
+            resources=["*"]
+        )
+    )
+
+    return verify_lambda

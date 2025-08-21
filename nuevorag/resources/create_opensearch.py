@@ -3,7 +3,7 @@ from aws_cdk import (
 )
 import json
 
-def create_opensearch(app, prefix):
+def create_opensearch(app, prefix, process_lambda_role, verify_lambda_role=None):
 
     network_policy = opensearchserverless.CfnSecurityPolicy(
         app, f"{prefix}-network-policy",
@@ -17,7 +17,8 @@ def create_opensearch(app, prefix):
                         "Resource": [f"collection/{prefix}-vector-collection"]
                     }
                 ],
-                "AllowFromPublic": True
+                "AllowFromPublic": True,
+                
             }
         ])
     )
@@ -37,6 +38,40 @@ def create_opensearch(app, prefix):
         })
     )
 
+    # Data Access Policy - CRÍTICO para acceso desde Lambda
+    # Incluir ambos roles: process y verify
+    principals = [process_lambda_role.role_arn]
+    if verify_lambda_role:
+        principals.append(verify_lambda_role.role_arn)
+    
+    data_access_policy = opensearchserverless.CfnAccessPolicy(
+        app, f"{prefix}-data-access-policy",
+        name=f"{prefix}-data-access-policy",
+        type="data",
+        description="Data access policy for Lambda to access OpenSearch collection and indexes",
+        policy=json.dumps([
+            {
+                "Rules": [
+                    {
+                        "ResourceType": "collection",
+                        "Resource": [f"collection/{prefix}-vector-collection"],
+                        "Permission": [
+                            "aoss:CreateCollectionItems",
+                            "aoss:UpdateCollectionItems", 
+                            "aoss:DescribeCollectionItems"
+                        ]
+                    },
+                    {
+                        "ResourceType": "index",
+                        "Resource": [f"index/{prefix}-vector-collection/*"],
+                        "Permission": ["aoss:*"]
+                    }
+                ],
+                "Principal": principals
+            }
+        ])
+    )
+
     vector_collection = opensearchserverless.CfnCollection(
         app, f"{prefix}-vector-collection",
         name=f"{prefix}-vector-collection",
@@ -46,6 +81,6 @@ def create_opensearch(app, prefix):
 
     vector_collection.add_dependency(network_policy)
     vector_collection.add_dependency(encryption_policy)
-
+    vector_collection.add_dependency(data_access_policy)
 
     return vector_collection

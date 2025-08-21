@@ -1,20 +1,19 @@
 from aws_cdk import (
     Duration,  
     Stack,
-    # aws_sqs as sqs,
     aws_s3 as s3,
     aws_apigateway as apigateway,
     RemovalPolicy,
     aws_lambda as lambda_,
-    aws_iam as iam,  # Para permisos IAM
-    aws_opensearchserverless as opensearchserverless,  # 👈 NUEVO: OpenSearch Serverless
-    aws_s3_notifications as s3n,  # Para S3 event notifications
-    CfnOutput,  # Para outputs
+    aws_iam as iam,
+    aws_opensearchserverless as opensearchserverless,
+    aws_s3_notifications as s3n, 
+    CfnOutput
 )
 from aws_cdk.aws_lambda_python_alpha import PythonFunction, PythonLayerVersion
 from constructs import Construct
 import json 
-from nuevorag.resources.create_lambdas import create_test_lambda, create_process_lambda, create_upload_lambda
+from nuevorag.resources.create_lambdas import create_test_lambda, create_process_lambda, create_upload_lambda, create_verify_lambda
 from nuevorag.resources.create_opensearch import create_opensearch
 from nuevorag.resources.layers import create_langchain_layer
 
@@ -31,14 +30,20 @@ class NuevoragStack(Stack):
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
         )
 
-        vector_collection = create_opensearch(self, stack_variables['prefix'])
-
         test_lambda = create_test_lambda(self, stack_variables['prefix'], langchain_layer)
         
-        process_lambda = create_process_lambda(self, stack_variables['prefix'], langchain_layer)
+        # Crear proceso lambda primero (sin OpenSearch) para obtener el rol
+        process_lambda = create_process_lambda(self, stack_variables['prefix'], langchain_layer, None)
         
-        # Crear la Lambda para generar presigned URLs
+        verify_lambda = create_verify_lambda(self, stack_variables['prefix'], langchain_layer)
+        
+        vector_collection = create_opensearch(self, stack_variables['prefix'], process_lambda.role, verify_lambda.role)
+        
+        process_lambda.add_environment("OPENSEARCH_ENDPOINT", f"https://{vector_collection.attr_collection_endpoint}")
+        
         upload_lambda = create_upload_lambda(self, stack_variables['prefix'], langchain_layer, bucket)
+        
+        verify_lambda.add_environment("OPENSEARCH_ENDPOINT", f"https://{vector_collection.attr_collection_endpoint}")
         
 
         bucket.add_event_notification(
@@ -49,23 +54,25 @@ class NuevoragStack(Stack):
 
         api = apigateway.RestApi(self, f"{stack_variables['prefix']}-Api")
 
-        # Endpoint /test  
         test_resource = api.root.add_resource("test")
         test_resource.add_method("POST", apigateway.LambdaIntegration(test_lambda))
         
-        # Endpoint /upload
         upload_resource = api.root.add_resource("upload")
         upload_resource.add_method("POST", apigateway.LambdaIntegration(upload_lambda))
         
-        # Método OPTIONS para CORS en ambos endpoints
-        for resource in [test_resource, upload_resource]:
+        verify_resource = api.root.add_resource("verify")
+        tenant_resource = verify_resource.add_resource("{tenant_id}")
+        tenant_resource.add_method("GET", apigateway.LambdaIntegration(verify_lambda))
+        
+        # Método OPTIONS para CORS en todos los endpoints
+        for resource in [test_resource, upload_resource, tenant_resource]:
             resource.add_method("OPTIONS", apigateway.MockIntegration(
                 integration_responses=[{
                     'statusCode': '200',
                     'responseParameters': {
                         'method.response.header.Access-Control-Allow-Headers': "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
                         'method.response.header.Access-Control-Allow-Origin': "'*'",
-                        'method.response.header.Access-Control-Allow-Methods': "'POST,OPTIONS'"
+                        'method.response.header.Access-Control-Allow-Methods': "'GET,POST,OPTIONS'"
                     }
                 }],
                 passthrough_behavior=apigateway.PassthroughBehavior.WHEN_NO_MATCH,
@@ -94,6 +101,11 @@ class NuevoragStack(Stack):
             description="URL completa del endpoint /upload"
         )
         
+        CfnOutput(self, "VerifyEndpoint", 
+            value=f"{api.url}verify/{{tenant_id}}",
+            description="URL del endpoint /verify - reemplazar {{tenant_id}} con ID real"
+        )
+        
         CfnOutput(self, "ProcessLambdaName",
             value=process_lambda.function_name,
             description="Nombre de la función Lambda que procesa archivos S3"
@@ -102,4 +114,14 @@ class NuevoragStack(Stack):
         CfnOutput(self, "S3BucketName",
             value=bucket.bucket_name,
             description="Nombre del bucket S3 (sube archivos a la carpeta uploads/)"
+        )
+        
+        CfnOutput(self, "OpenSearchEndpoint",
+            value=f"https://{vector_collection.attr_collection_endpoint}",
+            description="Endpoint de OpenSearch Serverless para conectividad"
+        )
+        
+        CfnOutput(self, "OpenSearchCollectionId",
+            value=vector_collection.attr_id,
+            description="ID de la colección OpenSearch Serverless"
         )

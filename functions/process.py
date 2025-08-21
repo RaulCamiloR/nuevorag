@@ -2,7 +2,16 @@ import json
 import urllib.parse
 import boto3
 import os
-from helpers.rag_helpers import extract_pdf_text, get_chunks, get_embeddings
+from helpers.rag_helpers import (
+    extract_pdf_text, 
+    get_chunks, 
+    get_embeddings,
+    create_opensearch_client,
+    create_index_if_not_exists,
+    index_document_bulk
+)
+from helpers.strategies import pdf_strategy
+from helpers.opensearch_indexing import opensearch_indexing
 
 def lambda_handler(event, context):
     
@@ -34,16 +43,11 @@ def lambda_handler(event, context):
             print(f"Nombre archivo: {filename}")
             print(f"Extensión: {extension}")
             
-            if extension == '.pdf':
-                result = process_pdf_file(
-                    s3_client, bucket_name, object_key, 
-                    tenant_id, document_type, filename
-                )
-                print(f"Resultado procesamiento PDF: {result}")
-            else:
-                print(f"⚠️ Extensión {extension} no soportada aún")
-                continue
-                
+            result = process_file(
+                s3_client, bucket_name, object_key, 
+                tenant_id, document_type, filename, extension
+            )
+              
         except Exception as e:
             print(f"❌ Error procesando archivo {object_key}: {str(e)}")
             continue
@@ -58,45 +62,44 @@ def lambda_handler(event, context):
     }
 
 
-def process_pdf_file(s3_client, bucket_name, object_key, tenant_id, document_type, filename):
+def process_file(s3_client, bucket_name, object_key, tenant_id, document_type, filename, extension):
     
     try:
         
         response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
         file_content = response['Body'].read()
+
+        embeddings = None
+        chunks = None
+
+        if extension == '.pdf':
+
+            chunks, embeddings = pdf_strategy(file_content)
         
-        text_content = extract_pdf_text(file_content)
+        else:
+            return {
+                "message": "Proximamente mas extensiones"
+            }
+
         
-        if not text_content.strip():
+        if not embeddings or not chunks:
             return {
                 "success": False,
-                "message": "No se pudo extraer texto del PDF"
+                "message": "No se pudieron generar embeddings o chunks"
             }
         
-        # estrategia depende del tipo de documento con IF
-        # importante futuro!!!
-        
-        chunks = get_chunks(text_content, 2000, 200)
-        
-        embeddings = get_embeddings(chunks, model_id="amazon.titan-embed-text-v1:0", dimensions=1536)
-        
-        # TODO: Indexar en OpenSearch (próximo paso)
-        print(f"📋 TODO: Indexar embeddings en OpenSearch")
-        
-        print(f"=== PROCESAMIENTO PDF EXITOSO ===")
+        opensearch_indexing(embeddings, chunks, tenant_id, document_type, object_key, filename)
+
         return {
             "success": True,
-            "message": "PDF procesado exitosamente",
-            "stats": {
-                "characters": len(text_content),
-                "chunks": len(chunks),
-                "embeddings": len(embeddings),
-                "dimensions": len(embeddings[0]) if embeddings else 0
-            }
+            "message": "Archivo procesado correctamente"
         }
+
         
     except Exception as e:
         print(f"❌ Error procesando PDF: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return {
             "success": False,
             "message": f"Error procesando PDF: {str(e)}"

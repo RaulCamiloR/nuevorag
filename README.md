@@ -70,3 +70,10 @@ cdk deploy --all --profile=milo-simulator --region=us-east-1
 .venv/bin/activate
 
 .venv\Scripts\Activate.ps1
+
+│ # En network policy, agregar:                                       │     
+     │ "AllowFromPublic": True,                                            │     
+     │ "DashboardsAccess": True                                            │     
+     │                                                                     │     
+     │ # En data access policy, agregar:                                   │     
+     │ "Permission": ["aoss:DashboardsAccessAll"]    

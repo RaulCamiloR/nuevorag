@@ -1,13 +1,16 @@
-"""
-RAG Helpers - Funciones para procesamiento de documentos y generación de embeddings
-"""
+
 import boto3
 import json
 import io
+import os
+import hashlib
 import PyPDF2
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Optional
+from datetime import datetime
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-# BedrockEmbeddings removido - ahora usamos boto3 directo
+from opensearchpy import OpenSearch, RequestsHttpConnection
+from requests_aws4auth import AWS4Auth
+
 
 
 def extract_pdf_text(file_content: bytes) -> str:
@@ -17,17 +20,14 @@ def extract_pdf_text(file_content: bytes) -> str:
         
         pdf_reader = PyPDF2.PdfReader(pdf_file)
         
-        print(f"📄 PDF tiene {len(pdf_reader.pages)} páginas")
-        
         text_content = ""
 
         for page_num, page in enumerate(pdf_reader.pages, 1):
             try:
                 page_text = page.extract_text()
                 text_content += f"\n{page_text}\n"
-                print(f"📄 Página {page_num}: {len(page_text)} caracteres")
             except Exception as e:
-                print(f"⚠️ Error en página {page_num}: {str(e)}")
+                print(f"Error en página {page_num}: {str(e)}")
                 continue
         
         text_content = clean_extracted_text(text_content)
@@ -82,24 +82,20 @@ def get_embeddings(chunks: List[str], model_id: str = "amazon.titan-embed-text-v
     
     try:
  
-        print(f"🔢 Inicializando cliente Bedrock Runtime...")
         bedrock_runtime = boto3.client('bedrock-runtime', region_name='us-east-1')
-        print(f"✅ Cliente inicializado - Modelo: {model_id}, Dimensiones: {dimensions}")
-        
+
         embeddings = []
         
         for i, chunk in enumerate(chunks):
             try:
                 print(f"🔄 Procesando chunk {i+1}/{len(chunks)} - {len(chunk)} caracteres")
                 
-                # Payload para Titan V2
                 payload = {
                     "inputText": chunk.strip(),
                     "dimensions": dimensions,
                     "normalize": True
                 }
-                
-                # Llamada a Bedrock
+            
                 response = bedrock_runtime.invoke_model(
                     modelId=model_id,
                     contentType="application/json",
@@ -147,4 +143,220 @@ def get_embedding_dimensions(model_id: str = "amazon.titan-embed-text-v2:0") -> 
     }
     
     return model_dimensions.get(model_id, 1024)
+
+
+def generate_document_hash(tenant_id: str, source_file: str, chunk_index: int, content_sample: str) -> str:
+    """
+    Genera un hash único para identificar un documento/chunk específico
+    
+    Args:
+        tenant_id: ID del tenant
+        source_file: Ruta del archivo fuente
+        chunk_index: Índice del chunk
+        content_sample: Muestra del contenido para mayor unicidad
+    
+    Returns:
+        Hash MD5 como string hexadecimal
+    """
+    # Combinar elementos únicos
+    unique_string = f"{tenant_id}|{source_file}|{chunk_index}|{content_sample}"
+    
+    # Generar hash MD5
+    hash_object = hashlib.md5(unique_string.encode('utf-8'))
+    document_hash = hash_object.hexdigest()
+    
+    return document_hash
+
+
+def create_opensearch_client(region: str = 'us-east-1') -> OpenSearch:
+
+    try:
+        print(f"🔐 Inicializando cliente OpenSearch para región {region}")
+        
+        session = boto3.Session()
+        credentials = session.get_credentials()
+        
+        awsauth = AWS4Auth(
+            credentials.access_key,
+            credentials.secret_key,
+            region,
+            'aoss',  # Amazon OpenSearch Serverless
+            session_token=credentials.token
+        )
+        
+        opensearch_endpoint = os.environ.get('OPENSEARCH_ENDPOINT')
+        if not opensearch_endpoint:
+            raise ValueError("Variable OPENSEARCH_ENDPOINT no configurada")
+        
+        host = opensearch_endpoint
+        
+        # Crear cliente
+        client = OpenSearch(
+            hosts=[{'host': host.replace('https://', ''), 'port': 443}],
+            http_auth=awsauth,
+            use_ssl=True,
+            verify_certs=True,
+            connection_class=RequestsHttpConnection,
+            timeout=60
+        )
+        
+        print(f"✅ Cliente OpenSearch creado exitosamente")
+        return client
+        
+    except Exception as e:
+        print(f"❌ Error creando cliente OpenSearch: {str(e)}")
+        raise ValueError(f"Error en cliente OpenSearch: {str(e)}")
+
+
+def create_index_if_not_exists(
+    client: OpenSearch, 
+    index_name: str, 
+    dimensions: int = 1024
+) -> bool:
+
+    try:
+
+        if client.indices.exists(index=index_name):
+            print(f"📋 Índice '{index_name}' ya existe")
+            return True
+        
+        print(f"🆕 Creando índice '{index_name}' con {dimensions} dimensiones")
+        
+        index_mapping = {
+            "settings": {
+                "index": {
+                    "knn": True,  # Habilitar k-NN search
+                    "knn.algo_param.ef_search": 100
+                }
+            },
+            "mappings": {
+                "properties": {
+                    "tenant_id": {
+                        "type": "keyword"  # Para filtrado exacto
+                    },
+                    "content": {
+                        "type": "text",
+                        "analyzer": "standard"
+                    },
+                    "embedding": {
+                        "type": "knn_vector",
+                        "dimension": dimensions,
+                        "method": {
+                            "name": "hnsw",
+                            "space_type": "cosinesimil",
+                            "engine": "nmslib"
+                        }
+                    },
+                    "document_type": {
+                        "type": "keyword"
+                    },
+                    "file_format": {
+                        "type": "keyword"
+                    },
+                    "source_file": {
+                        "type": "keyword"
+                    },
+                    "chunk_index": {
+                        "type": "integer"
+                    },
+                    "created_at": {
+                        "type": "date",
+                        "format": "strict_date_optional_time"
+                    }
+                }
+            }
+        }
+        
+        # Crear índice
+        response = client.indices.create(
+            index=index_name,
+            body=index_mapping
+        )
+        
+        print(f"✅ Índice '{index_name}' creado exitosamente")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error creando índice '{index_name}': {str(e)}")
+        return False
+
+
+def index_document_bulk(
+    client: OpenSearch,
+    index_name: str,
+    documents: List[Dict],
+    tenant_id: str
+) -> bool:
+
+    try:
+        if not documents:
+            print("⚠️ No hay documentos para indexar")
+            return True
+        
+        print(f"📦 Preparando bulk indexing de {len(documents)} documentos para tenant '{tenant_id}'")
+        
+        # Preparar bulk body
+        bulk_body = []
+        timestamp = datetime.utcnow().isoformat()
+        
+        for i, doc in enumerate(documents):
+            # Header de la acción de indexado (SIN _id para auto-generación)
+            action = {
+                "index": {
+                    "_index": index_name
+                }
+            }
+            bulk_body.append(action)
+            
+            # Generar hash único para identificación/deduplicación
+            content_hash = generate_document_hash(
+                tenant_id, 
+                doc.get('source_file', 'unknown'), 
+                i,
+                doc['content'][:100]  # Primeros 100 chars del contenido
+            )
+            
+            # Documento completo
+            document = {
+                "tenant_id": tenant_id,
+                "content": doc['content'],
+                "embedding": doc['embedding'],
+                "document_type": doc.get('document_type', 'unknown'),
+                "file_format": doc.get('file_format', 'unknown'),
+                "source_file": doc.get('source_file', 'unknown'),
+                "chunk_index": i,
+                "document_hash": content_hash,  # Hash único para identificación
+                "created_at": timestamp
+            }
+            bulk_body.append(document)
+        
+        # Ejecutar bulk request
+        print(f"🚀 Ejecutando bulk indexing...")
+        response = client.bulk(body=bulk_body)
+        
+        # Verificar errores
+        if response.get('errors'):
+            failed_docs = []
+            for item in response['items']:
+                if 'error' in item.get('index', {}):
+                    error_info = item['index']['error']
+                    failed_docs.append(f"ID: {item['index']['_id']}, Error: {error_info}")
+                    print(f"❌ Error indexando: {error_info}")
+            
+            if failed_docs:
+                print(f"⚠️ {len(failed_docs)} documentos fallaron en indexado")
+                return False
+        
+        successful_docs = len([item for item in response['items'] if 'error' not in item.get('index', {})])
+        print(f"✅ Bulk indexing completado: {successful_docs}/{len(documents)} documentos indexados")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error en bulk indexing: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 
