@@ -3,7 +3,7 @@ from aws_cdk import (
 )
 import json
 
-def create_opensearch(app, prefix, process_lambda_role, verify_lambda_role=None):
+def create_opensearch(app, prefix, process_lambda_role, verify_lambda_role=None, query_lambda_role=None):
 
     network_policy = opensearchserverless.CfnSecurityPolicy(
         app, f"{prefix}-network-policy",
@@ -39,10 +39,12 @@ def create_opensearch(app, prefix, process_lambda_role, verify_lambda_role=None)
     )
 
     # Data Access Policy - CRÍTICO para acceso desde Lambda
-    # Incluir ambos roles: process y verify
+    # Incluir roles: process, verify y query
     principals = [process_lambda_role.role_arn]
     if verify_lambda_role:
         principals.append(verify_lambda_role.role_arn)
+    if query_lambda_role:
+        principals.append(query_lambda_role.role_arn)
     
     data_access_policy = opensearchserverless.CfnAccessPolicy(
         app, f"{prefix}-data-access-policy",

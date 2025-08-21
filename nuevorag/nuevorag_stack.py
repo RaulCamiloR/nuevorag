@@ -13,7 +13,7 @@ from aws_cdk import (
 from aws_cdk.aws_lambda_python_alpha import PythonFunction, PythonLayerVersion
 from constructs import Construct
 import json 
-from nuevorag.resources.create_lambdas import create_test_lambda, create_process_lambda, create_upload_lambda, create_verify_lambda
+from nuevorag.resources.create_lambdas import create_test_lambda, create_process_lambda, create_upload_lambda, create_verify_lambda, create_query_lambda
 from nuevorag.resources.create_opensearch import create_opensearch
 from nuevorag.resources.layers import create_langchain_layer
 
@@ -37,13 +37,17 @@ class NuevoragStack(Stack):
         
         verify_lambda = create_verify_lambda(self, stack_variables['prefix'], langchain_layer)
         
-        vector_collection = create_opensearch(self, stack_variables['prefix'], process_lambda.role, verify_lambda.role)
+        query_lambda = create_query_lambda(self, stack_variables['prefix'], langchain_layer)
+        
+        vector_collection = create_opensearch(self, stack_variables['prefix'], process_lambda.role, verify_lambda.role, query_lambda.role)
         
         process_lambda.add_environment("OPENSEARCH_ENDPOINT", f"https://{vector_collection.attr_collection_endpoint}")
         
         upload_lambda = create_upload_lambda(self, stack_variables['prefix'], langchain_layer, bucket)
         
         verify_lambda.add_environment("OPENSEARCH_ENDPOINT", f"https://{vector_collection.attr_collection_endpoint}")
+        
+        query_lambda.add_environment("OPENSEARCH_ENDPOINT", f"https://{vector_collection.attr_collection_endpoint}")
         
 
         bucket.add_event_notification(
@@ -64,8 +68,12 @@ class NuevoragStack(Stack):
         tenant_resource = verify_resource.add_resource("{tenant_id}")
         tenant_resource.add_method("GET", apigateway.LambdaIntegration(verify_lambda))
         
+        # Endpoint /query
+        query_resource = api.root.add_resource("query")
+        query_resource.add_method("POST", apigateway.LambdaIntegration(query_lambda))
+        
         # Método OPTIONS para CORS en todos los endpoints
-        for resource in [test_resource, upload_resource, tenant_resource]:
+        for resource in [test_resource, upload_resource, tenant_resource, query_resource]:
             resource.add_method("OPTIONS", apigateway.MockIntegration(
                 integration_responses=[{
                     'statusCode': '200',
@@ -104,6 +112,11 @@ class NuevoragStack(Stack):
         CfnOutput(self, "VerifyEndpoint", 
             value=f"{api.url}verify/{{tenant_id}}",
             description="URL del endpoint /verify - reemplazar {{tenant_id}} con ID real"
+        )
+        
+        CfnOutput(self, "QueryEndpoint", 
+            value=f"{api.url}query",
+            description="URL del endpoint /query para consultas RAG"
         )
         
         CfnOutput(self, "ProcessLambdaName",

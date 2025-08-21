@@ -71,6 +71,7 @@ cdk deploy --all --profile=milo-simulator --region=us-east-1
 
 .venv\Scripts\Activate.ps1
 
+# No Sirve - Serverless por ahora no deja ver los index en la consola
 │ # En network policy, agregar:                                       │     
      │ "AllowFromPublic": True,                                            │     
      │ "DashboardsAccess": True                                            │     

@@ -169,15 +169,54 @@ def create_verify_lambda(app, prefix, layer):
         }
     )
 
-    # Permisos para leer de OpenSearch Serverless
     verify_lambda.add_to_role_policy(
         iam.PolicyStatement(
             effect=iam.Effect.ALLOW,
             actions=[
-                "aoss:*"  # Permisos de lectura para OpenSearch
+                "aoss:*"
             ],
             resources=["*"]
         )
     )
 
     return verify_lambda
+
+
+def create_query_lambda(app, prefix, layer):
+
+    query_lambda = PythonFunction(app, f"{prefix}-QueryLambda",
+        runtime=lambda_.Runtime.PYTHON_3_12,
+        entry="functions",  
+        handler="lambda_handler",    
+        index="query.py",           
+        layers=[layer],    
+        timeout=Duration.minutes(2),   
+        memory_size=1024,              
+        environment={
+            # Se agregará OPENSEARCH_ENDPOINT en el stack principal
+        }
+    )
+
+    query_lambda.add_to_role_policy(
+        iam.PolicyStatement(
+            effect=iam.Effect.ALLOW,
+            actions=[
+                "aoss:*"
+            ],
+            resources=["*"]
+        )
+    )
+    
+    query_lambda.add_to_role_policy(
+        iam.PolicyStatement(
+            effect=iam.Effect.ALLOW,
+            actions=[
+                "bedrock:InvokeModel",
+                "bedrock:ListFoundationModels",
+                "bedrock:GetFoundationModel"
+            ],
+            resources=["*"]
+        )
+    )
+
+    return query_lambda
