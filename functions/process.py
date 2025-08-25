@@ -10,7 +10,7 @@ from helpers.rag_helpers import (
     create_index_if_not_exists,
     index_document_bulk
 )
-from helpers.strategies import pdf_strategy
+from helpers.strategies import pdf_strategy, jpg_strategy
 from helpers.opensearch_indexing import opensearch_indexing
 
 def lambda_handler(event, context):
@@ -73,8 +73,10 @@ def process_file(s3_client, bucket_name, object_key, tenant_id, document_type, f
         chunks = None
 
         if extension == '.pdf':
-
             chunks, embeddings = pdf_strategy(file_content)
+        
+        elif extension == '.jpg':
+            chunks, embeddings = jpg_strategy(file_content)
         
         else:
             return {

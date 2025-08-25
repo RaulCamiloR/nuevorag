@@ -11,7 +11,7 @@ def create_langchain_layer(app, prefix):
     langchain_layer = PythonLayerVersion(
         app,
         f"{prefix}-LangChainAWSLayer",
-        entry="layers/langchain_layer",  # Carpeta que acabamos de crear
+        entry="layers/langchain_layer",
         compatible_runtimes=[lambda_.Runtime.PYTHON_3_12],
         description="Layer con LangChain-AWS y dependencias relacionadas"
     )

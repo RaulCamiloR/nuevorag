@@ -1,8 +1,9 @@
-from helpers.rag_helpers import extract_pdf_text, get_chunks, get_embeddings
+from helpers.rag_helpers import extract_pdf_text, get_chunks, get_embeddings, get_multimodal_embeddings
 from helpers.opensearch_indexing import opensearch_query
 import boto3
 import json
 from botocore.config import Config
+import base64
 
 def pdf_strategy(text):
 
@@ -13,12 +14,20 @@ def pdf_strategy(text):
         if not text_content.strip():
             return {
                 "success": False,
-            "message": "No se pudo extraer texto"
+                "message": "No se pudo extraer texto"
         }
 
         chunks = get_chunks(text_content, 2000, 200)
 
-        embeddings = get_embeddings(chunks, model_id="amazon.titan-embed-text-v2:0", dimensions=1024)
+        # Usar Titan Multimodal para compatibilidad con imágenes
+        embeddings = []
+        for chunk in chunks:
+            chunk_embedding = get_multimodal_embeddings(
+                base64_image=None,  # Solo texto
+                input_text=chunk,
+                dimensions=1024
+            )
+            embeddings.extend(chunk_embedding)  # get_multimodal_embeddings devuelve lista
 
         return (chunks, embeddings)
     
@@ -29,13 +38,44 @@ def pdf_strategy(text):
         }
 
 
+def jpg_strategy(file_content):
+
+    try:
+        
+        base64_image = base64.b64encode(file_content).decode('utf-8')
+        print(f"🖼️ Imagen convertida a base64: {len(base64_image)} caracteres")
+        
+        # Generar embedding multimodal usando Titan
+        embeddings = get_multimodal_embeddings(
+            base64_image=base64_image,
+            dimensions=1024  # Consistente con nuestro setup actual
+        )
+        
+        # "Chunk" placeholder para mantener interfaz consistente
+        # La imagen completa es tratada como un único elemento indexable
+        chunks = ["[IMAGE_CONTENT]"]
+        
+        print(f"✅ jpg_strategy completada: 1 imagen → 1 embedding multimodal")
+        return (chunks, embeddings)
+        
+    except Exception as e:
+        print(f"❌ Error en jpg_strategy: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "success": False,
+            "message": f"Error procesando imagen JPG: {str(e)}"
+        }
+
+
 def query_strategy(question, tenant_id, document_type=None):
 
     try:
 
-        question_embeddings = get_embeddings(
-            [question], 
-            model_id="amazon.titan-embed-text-v2:0", 
+        # Usar Titan Multimodal para compatibilidad con imágenes indexadas
+        question_embeddings = get_multimodal_embeddings(
+            base64_image=None,  # Solo texto para query
+            input_text=question,
             dimensions=1024
         )
         

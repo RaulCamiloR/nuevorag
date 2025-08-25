@@ -95,7 +95,12 @@ def validate_upload_request(tenant_id, document_type, filename, content_type):
         'text/csv': ['.csv'],
         'application/msword': ['.doc'],
         'application/vnd.ms-excel': ['.xls'],
-        'application/vnd.ms-powerpoint': ['.ppt']
+        'application/vnd.ms-powerpoint': ['.ppt'],
+        # Tipos de imagen soportados
+        'image/jpeg': ['.jpg', '.jpeg'],
+        'image/png': ['.png'],
+        'image/gif': ['.gif'],
+        'image/webp': ['.webp']
     }
     
     if content_type not in allowed_content_types:

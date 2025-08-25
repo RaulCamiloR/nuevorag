@@ -262,6 +262,13 @@ def create_index_if_not_exists(
                     "created_at": {
                         "type": "date",
                         "format": "strict_date_optional_time"
+                    },
+                    "content_type": {
+                        "type": "keyword"  # "text" o "image"
+                    },
+                    "description": {
+                        "type": "text",
+                        "analyzer": "standard"  # Para imágenes principalmente
                     }
                 }
             }
@@ -290,17 +297,15 @@ def index_document_bulk(
 
     try:
         if not documents:
-            print("⚠️ No hay documentos para indexar")
+            print("No hay documentos para indexar")
             return True
         
-        print(f"📦 Preparando bulk indexing de {len(documents)} documentos para tenant '{tenant_id}'")
+        print(f"Preparando bulk indexing de {len(documents)} documentos para tenant '{tenant_id}'")
         
-        # Preparar bulk body
         bulk_body = []
         timestamp = datetime.utcnow().isoformat()
         
         for i, doc in enumerate(documents):
-            # Header de la acción de indexado (SIN _id para auto-generación)
             action = {
                 "index": {
                     "_index": index_name
@@ -308,7 +313,6 @@ def index_document_bulk(
             }
             bulk_body.append(action)
             
-            # Generar hash único para identificación/deduplicación
             content_hash = generate_document_hash(
                 tenant_id, 
                 doc.get('source_file', 'unknown'), 
@@ -357,6 +361,69 @@ def index_document_bulk(
         import traceback
         traceback.print_exc()
         return False
+
+
+def get_multimodal_embeddings(base64_image: str = None, input_text: str = None, dimensions: int = 1024) -> List[List[float]]:
+
+    if dimensions not in [1024, 384, 256]:
+        raise ValueError("Dimensiones soportadas por Titan Multimodal: 1024, 384, 256")
+    
+    if not base64_image and not input_text:
+        raise ValueError("Debe proporcionar al menos base64_image o input_text")
+    
+    try:
+        
+        bedrock_runtime = boto3.client('bedrock-runtime', region_name='us-east-1')
+        
+        # Determinar tipo de embedding
+        if base64_image and input_text:
+            print(f"🖼️🔤 Generando embedding multimodal (imagen + texto) - {dimensions} dimensiones")
+        elif base64_image:
+            print(f"🖼️ Generando embedding de imagen - {dimensions} dimensiones")
+        else:
+            print(f"🔤 Generando embedding de texto (modelo multimodal) - {dimensions} dimensiones")
+        
+        # Payload para Titan Multimodal
+        payload = {
+            "embeddingConfig": {
+                "outputEmbeddingLength": dimensions
+            }
+        }
+        
+        # Agregar imagen si está presente
+        if base64_image:
+            payload["inputImage"] = base64_image
+            
+        # Agregar texto si está presente
+        if input_text:
+            payload["inputText"] = input_text.strip()
+            if len(input_text) > 50:
+                print(f"📝 Texto: {input_text[:50]}...")
+            else:
+                print(f"📝 Texto: {input_text}")
+        
+        response = bedrock_runtime.invoke_model(
+            modelId="amazon.titan-embed-image-v1",
+            contentType="application/json",
+            accept="application/json",
+            body=json.dumps(payload)
+        )
+        
+        response_body = json.loads(response['body'].read())
+        embedding = response_body.get('embedding', [])
+        
+        if not embedding:
+            print("❌ Titan Multimodal no devolvió embedding")
+            raise ValueError("No se pudo generar embedding multimodal")
+            
+        print(f"✅ Embedding multimodal generado - {len(embedding)} dimensiones")
+        return [embedding]  # Devolver como lista para mantener consistencia
+        
+    except Exception as e:
+        print(f"❌ Error generando embedding multimodal: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise ValueError(f"Error en embedding multimodal: {str(e)}")
 
 
 

@@ -7,7 +7,6 @@ def opensearch_indexing(embeddings, chunks, tenant_id, document_type, object_key
         
         index_name = f"rag-documents-{tenant_id}"
         
-        # Crear índice si no existe
         index_created = create_index_if_not_exists(
             opensearch_client, 
             index_name,     
@@ -15,21 +14,32 @@ def opensearch_indexing(embeddings, chunks, tenant_id, document_type, object_key
         )
         
         if not index_created:
-            print(f"⚠️ No se pudo crear/verificar índice {index_name}")
+            print(f"No se pudo crear/verificar índice {index_name}")
             return {
                 "success": False,
                 "message": f"Error creando índice {index_name}"
             }
         
+        file_extension = '.' + filename.split('.')[-1].lower() if '.' in filename else ''
+        is_image = chunks and len(chunks) > 0 and chunks[0] == "[IMAGE_CONTENT]"
+        
         documents = []
         for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-            documents.append({
+            doc = {
                 'content': chunk,
                 'embedding': embedding,
                 'document_type': document_type,
-                'file_format': '.pdf',
+                'file_format': file_extension,
                 'source_file': object_key
-            })
+            }
+            
+            if is_image:
+                doc['content_type'] = 'image'
+                doc['description'] = f'Imagen {file_extension} del documento {filename}'
+            else:
+                doc['content_type'] = 'text'
+                
+            documents.append(doc)
         
         indexing_success = index_document_bulk(
             opensearch_client,
@@ -39,10 +49,11 @@ def opensearch_indexing(embeddings, chunks, tenant_id, document_type, object_key
         )
         
         if indexing_success:
-            print(f"🎉 Documento indexado exitosamente en OpenSearch")
+            content_description = "imagen" if is_image else "documento"
+            print(f"🎉 {content_description.title()} indexado exitosamente en OpenSearch")
             return {
                 "success": True,
-                "message": f"PDF procesado e indexado: {len(chunks)} chunks",
+                "message": f"{content_description.title()} procesado e indexado: {len(chunks)} elementos",
                 "details": {
                     "tenant_id": tenant_id,
                     "index_name": index_name,
