@@ -426,4 +426,79 @@ def get_multimodal_embeddings(base64_image: str = None, input_text: str = None, 
         raise ValueError(f"Error en embedding multimodal: {str(e)}")
 
 
+def analyze_image_with_rekognition(image_bytes: bytes, filename: str = "imagen") -> str:
+
+    try:
+        
+        rekognition = boto3.client('rekognition', region_name='us-east-1')
+        
+        print(f"🔍 Analizando imagen '{filename}' con Rekognition...")
+        
+        # 1. Detectar objetos, escenas y conceptos
+        print("📋 Detectando objetos y escenas...")
+        labels_response = rekognition.detect_labels(
+            Image={'Bytes': image_bytes},
+            MaxLabels=20,  # Máximo 20 etiquetas
+            MinConfidence=75.0  # Confianza mínima del 75%
+        )
+        
+        # Extraer objetos detectados
+        objects = []
+        for label in labels_response.get('Labels', []):
+            name = label['Name']
+            confidence = label['Confidence']
+            objects.append(f"{name} ({confidence:.0f}%)")
+            
+        objects_text = ", ".join(objects[:10]) if objects else "No se detectaron objetos específicos"
+        
+        # 2. Extraer texto visible (OCR)
+        print("🔤 Extrayendo texto visible...")
+        try:
+            text_response = rekognition.detect_text(
+                Image={'Bytes': image_bytes}
+            )
+            
+            detected_texts = []
+            for text_detection in text_response.get('TextDetections', []):
+                if text_detection['Type'] == 'LINE':  # Solo líneas completas, no palabras individuales
+                    text = text_detection['DetectedText']
+                    confidence = text_detection['Confidence']
+                    if confidence >= 80.0:  # Solo texto con alta confianza
+                        detected_texts.append(text)
+                        
+            text_content = " | ".join(detected_texts) if detected_texts else "No se detectó texto visible"
+            
+        except Exception as text_error:
+            print(f"⚠️ Error en detección de texto: {str(text_error)}")
+            text_content = "No se pudo analizar texto en la imagen"
+        
+        # 3. Generar descripción completa
+        description = f"""Imagen '{filename}' que contiene:
+
+OBJETOS DETECTADOS: {objects_text}
+
+TEXTO VISIBLE: {text_content}
+
+Esta es una imagen procesada con análisis visual automático que permite hacer consultas sobre su contenido."""
+        
+        print(f"✅ Análisis completado:")
+        print(f"   - Objetos: {len(objects)} detectados")
+        print(f"   - Texto: {'Sí' if detected_texts else 'No'} detectado")
+        
+        return description
+        
+    except Exception as e:
+        error_msg = f"Error analizando imagen con Rekognition: {str(e)}"
+        print(f"❌ {error_msg}")
+        
+        # Descripción de fallback
+        return f"""Imagen '{filename}' (Error en análisis automático):
+
+CONTENIDO: Imagen subida al sistema pero no se pudo analizar automáticamente.
+
+ERROR: {str(e)}
+
+Esta imagen está indexada y puede ser encontrada por búsquedas semánticas."""
+
+
 

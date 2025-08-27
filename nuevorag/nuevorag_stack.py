@@ -32,7 +32,6 @@ class NuevoragStack(Stack):
 
         test_lambda = create_test_lambda(self, stack_variables['prefix'], langchain_layer)
         
-        # Crear proceso lambda primero (sin OpenSearch) para obtener el rol
         process_lambda = create_process_lambda(self, stack_variables['prefix'], langchain_layer, None)
         
         verify_lambda = create_verify_lambda(self, stack_variables['prefix'], langchain_layer)

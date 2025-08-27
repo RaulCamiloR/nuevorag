@@ -76,7 +76,7 @@ def process_file(s3_client, bucket_name, object_key, tenant_id, document_type, f
             chunks, embeddings = pdf_strategy(file_content)
         
         elif extension == '.jpg':
-            chunks, embeddings = jpg_strategy(file_content)
+            chunks, embeddings = jpg_strategy(file_content, filename)
         
         else:
             return {

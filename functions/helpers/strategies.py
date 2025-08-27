@@ -1,4 +1,4 @@
-from helpers.rag_helpers import extract_pdf_text, get_chunks, get_embeddings, get_multimodal_embeddings
+from helpers.rag_helpers import extract_pdf_text, get_chunks, get_embeddings, get_multimodal_embeddings, analyze_image_with_rekognition
 from helpers.opensearch_indexing import opensearch_query
 import boto3
 import json
@@ -38,24 +38,42 @@ def pdf_strategy(text):
         }
 
 
-def jpg_strategy(file_content):
+def jpg_strategy(file_content, filename="imagen.jpg"):
+    """
+    Procesa imagen JPG usando Rekognition para análisis visual y embeddings multimodales
+    
+    Args:
+        file_content: Contenido binario de la imagen JPG
+        filename: Nombre del archivo para referencia
+    
+    Returns:
+        chunks, embeddings: Tupla con descripción de Rekognition y embeddings multimodales
+    """
 
     try:
         
-        base64_image = base64.b64encode(file_content).decode('utf-8')
-        print(f"🖼️ Imagen convertida a base64: {len(base64_image)} caracteres")
+        import base64
         
-        # Generar embedding multimodal usando Titan
+        print(f"🖼️ Procesando imagen: {filename}")
+        
+        # 1. Analizar imagen con Rekognition para obtener descripción textual
+        description = analyze_image_with_rekognition(file_content, filename)
+        
+        # 2. Convertir imagen a base64 para embeddings multimodales  
+        base64_image = base64.b64encode(file_content).decode('utf-8')
+        print(f"📝 Base64 generado: {len(base64_image)} caracteres")
+        
+        # 3. Generar embeddings multimodales combinando imagen + descripción textual
         embeddings = get_multimodal_embeddings(
             base64_image=base64_image,
-            dimensions=1024  # Consistente con nuestro setup actual
+            input_text=description,  # Combinar imagen con descripción de Rekognition
+            dimensions=1024
         )
         
-        # "Chunk" placeholder para mantener interfaz consistente
-        # La imagen completa es tratada como un único elemento indexable
-        chunks = ["[IMAGE_CONTENT]"]
+        # 4. Usar descripción real en lugar de placeholder
+        chunks = [description]  # Descripción textual rica del contenido visual
         
-        print(f"✅ jpg_strategy completada: 1 imagen → 1 embedding multimodal")
+        print(f"✅ jpg_strategy completada: imagen analizada → descripción + embedding híbrido")
         return (chunks, embeddings)
         
     except Exception as e:

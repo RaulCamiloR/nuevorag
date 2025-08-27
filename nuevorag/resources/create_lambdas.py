@@ -80,6 +80,19 @@ def create_process_lambda(app, prefix, layer, opensearch_collection):
         )
     )
     
+    # Permisos para Rekognition (análisis de imágenes)
+    process_lambda.add_to_role_policy(
+        iam.PolicyStatement(
+            effect=iam.Effect.ALLOW,
+            actions=[
+                "rekognition:DetectLabels",
+                "rekognition:DetectText",
+                "rekognition:DetectFaces"  # Opcional para futuras funcionalidades
+            ],
+            resources=["*"]
+        )
+    )
+    
     # Permisos para OpenSearch Serverless (solo si la colección existe)
     if opensearch_collection:
         process_lambda.add_to_role_policy(
